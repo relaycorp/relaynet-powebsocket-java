@@ -54,6 +54,7 @@ import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.security.PublicKey
 import java.time.Duration
+import java.util.logging.Logger
 
 /**
  * PoWeb client.
@@ -84,6 +85,8 @@ public class PoWebClient internal constructor(
 
     internal val baseHttpUrl: String = "$urlScheme://$hostName:$port/v1"
     internal val baseWsUrl: String = "$wsScheme://$hostName:$port/v1"
+
+    private val logger by lazy { Logger.getLogger("PoWeb") }
 
     /**
      * Close the underlying connection to the server (if any).
@@ -191,9 +194,12 @@ public class PoWebClient internal constructor(
             throw NonceSignerException("At least one nonce signer must be specified")
         }
 
+        logger.info("Before connecting")
+
         val trustedCertificates = nonceSigners.map { it.certificate }
         val streamingModeHeader = Pair(StreamingMode.HEADER_NAME, streamingMode.headerValue)
         wsConnect(PARCEL_COLLECTION_ENDPOINT_PATH, listOf(streamingModeHeader)) {
+            logger.info("Connected. Will do handshake")
             try {
                 handshake(nonceSigners)
             } catch (exc: ClosedReceiveChannelException) {
@@ -205,8 +211,10 @@ public class PoWebClient internal constructor(
                     exc
                 )
             }
+            logger.info("Handshake complete")
             collectAndAckParcels(this, this@flow, trustedCertificates)
 
+            logger.info("Closing")
             // The server must've closed the connection for us to get here, since we're consuming
             // all incoming messages indefinitely.
             val reason = closeReason.await()!!
@@ -226,6 +234,7 @@ public class PoWebClient internal constructor(
         trustedCertificates: List<Certificate>
     ) {
         for (frame in webSocketSession.incoming) {
+            logger.info("Got delivery. Will parse...")
             val delivery = try {
                 ParcelDelivery.deserialize(frame.readBytes())
             } catch (exc: InvalidMessageException) {
@@ -235,8 +244,10 @@ public class PoWebClient internal constructor(
                 throw ServerBindingException("Received invalid message from server", exc)
             }
             val collector = ParcelCollection(delivery.parcelSerialized, trustedCertificates) {
+                logger.info("ACking delivery...")
                 webSocketSession.outgoing.send(Frame.Text(delivery.deliveryId))
             }
+            logger.info("Delivery was valid")
             flowCollector.emit(collector)
         }
     }
